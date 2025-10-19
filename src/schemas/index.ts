@@ -37,10 +37,18 @@ export const redemptionUpdateSchema = z.object({
   note: z.string().max(500).optional(),
 });
 
-export const priceManualUpdateSchema = z.object({
-  myrPerG: z.number().positive(),
-  note: z.string().max(500).optional(),
-});
+/** Accept EITHER single price OR buy/sell pair. */
+export const priceManualUpdateSchema = z.union([
+  z.object({
+    myrPerG: z.number().positive(),
+    note: z.string().max(500).optional(),
+  }),
+  z.object({
+    myrPerG_buy: z.number().positive(),
+    myrPerG_sell: z.number().positive(),
+    note: z.string().max(500).optional(),
+  }),
+]);
 
 export const paginationQuerySchema = z.object({
   limit: z.string().optional(),
