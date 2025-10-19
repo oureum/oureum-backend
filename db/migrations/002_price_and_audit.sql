@@ -1,79 +1,50 @@
 -- =========================================
--- 001_init.sql (baseline schema)
+-- 002_price_and_audit.sql
+-- Price snapshots + Admin audit logs
+-- Idempotent for both fresh and existing DBs
 -- =========================================
 
--- admins: admin whitelist (with role)
-CREATE TABLE IF NOT EXISTS admins (
-  id BIGSERIAL PRIMARY KEY,
-  wallet_address TEXT UNIQUE NOT NULL,
-  role TEXT NOT NULL DEFAULT 'ADMIN',
-  created_at TIMESTAMP WITH TIME ZONE DEFAULT NOW()
+-- 1) Price snapshots
+--    Cache gold price (USD/oz), FX (USD->MYR), computed MYR/g,
+--    plus per-side buy/sell and effective_date from BNM.
+CREATE TABLE IF NOT EXISTS price_snapshots (
+  id                 BIGSERIAL PRIMARY KEY,
+  source             TEXT NOT NULL,                -- "manual" | "bnm" | "external"
+  gold_usd_per_oz    NUMERIC(18,6),                -- nullable
+  fx_usd_to_myr      NUMERIC(18,6),                -- nullable
+  computed_myr_per_g NUMERIC(18,6) NOT NULL,       -- base MYR/g after FX/oz->g
+  markup_bps         INTEGER DEFAULT 0,            -- global markup (bps)
+  note               TEXT,
+  -- new columns (safe on fresh create; will be added via ALTER for existing DBs):
+  effective_date     DATE,                         -- e.g. BNM effective date
+  buy_myr_per_g      NUMERIC(18,6),                -- user buy (what user pays)
+  sell_myr_per_g     NUMERIC(18,6),                -- user sell (what user receives)
+  created_at         TIMESTAMP WITH TIME ZONE DEFAULT NOW()
 );
 
--- users: end users (identified by wallet or user_id)
-CREATE TABLE IF NOT EXISTS users (
-  id BIGSERIAL PRIMARY KEY,
-  wallet_address TEXT UNIQUE,
-  email TEXT,
-  created_at TIMESTAMP WITH TIME ZONE DEFAULT NOW()
+-- indexes
+CREATE INDEX IF NOT EXISTS idx_price_snapshots_created    ON price_snapshots (created_at DESC);
+CREATE INDEX IF NOT EXISTS idx_price_snapshots_effective  ON price_snapshots (effective_date);
+CREATE INDEX IF NOT EXISTS idx_price_snapshots_source     ON price_snapshots (source);
+
+-- Backward-compatible ALTERs (safe if columns already exist)
+ALTER TABLE price_snapshots
+  ADD COLUMN IF NOT EXISTS effective_date DATE;
+ALTER TABLE price_snapshots
+  ADD COLUMN IF NOT EXISTS buy_myr_per_g  NUMERIC(18,6);
+ALTER TABLE price_snapshots
+  ADD COLUMN IF NOT EXISTS sell_myr_per_g NUMERIC(18,6);
+
+-- 2) Admin audit logs
+CREATE TABLE IF NOT EXISTS admin_audit_logs (
+  id            BIGSERIAL PRIMARY KEY,
+  admin_wallet  TEXT NOT NULL,
+  action        TEXT NOT NULL,        -- e.g. FUND_PRESET | PRICE_UPDATE | MINT | BURN | REDEMPTION_STATUS_UPDATE
+  target        TEXT,                 -- optional: target wallet/id etc.
+  detail        JSONB,                -- optional payload snapshot
+  created_at    TIMESTAMP WITH TIME ZONE DEFAULT NOW()
 );
 
--- rm_balances: one row per user (custodial Ringgit credits)
-CREATE TABLE IF NOT EXISTS rm_balances (
-  id BIGSERIAL PRIMARY KEY,
-  user_id BIGINT NOT NULL REFERENCES users(id) ON DELETE CASCADE,
-  balance_myr NUMERIC(18,2) NOT NULL DEFAULT 0,
-  updated_at TIMESTAMP WITH TIME ZONE DEFAULT NOW()
-);
-
--- oumg_balances: one row per user (custodial OUMG grams)
-CREATE TABLE IF NOT EXISTS oumg_balances (
-  id BIGSERIAL PRIMARY KEY,
-  user_id BIGINT NOT NULL REFERENCES users(id) ON DELETE CASCADE,
-  balance_g NUMERIC(24,8) NOT NULL DEFAULT 0,
-  updated_at TIMESTAMP WITH TIME ZONE DEFAULT NOW()
-);
-
--- token_ops: buy->mint / sell->burn audit log (join to users for wallet)
-CREATE TABLE IF NOT EXISTS token_ops (
-  id BIGSERIAL PRIMARY KEY,
-  user_id BIGINT NOT NULL REFERENCES users(id) ON DELETE CASCADE,
-  op_type TEXT NOT NULL CHECK (op_type IN ('BUY_MINT','SELL_BURN')),
-  grams NUMERIC(24,8) NOT NULL,
-  amount_myr NUMERIC(18,2) NOT NULL,
-  price_myr_per_g NUMERIC(18,6) NOT NULL,
-  tx_hash TEXT,
-  created_at TIMESTAMP WITH TIME ZONE DEFAULT NOW()
-);
-
--- gold_ledger: daily intake / inventory (normalized columns)
-CREATE TABLE IF NOT EXISTS gold_ledger (
-  id BIGSERIAL PRIMARY KEY,
-  entry_date DATE NOT NULL,                 -- normalized name
-  intake_g NUMERIC(18,6) NOT NULL CHECK (intake_g >= 0),
-  source TEXT,                              -- LBMA / PAMP / local bank / jeweler
-  purity_bp INTEGER,                        -- 999 for 99.9%
-  serial TEXT,
-  batch TEXT,
-  storage TEXT,                             -- e.g. "Local vault (MY)"
-  custody TEXT,                             -- e.g. "unallocated"
-  insurance TEXT,
-  audit_ref TEXT,
-  note TEXT,
-  created_at TIMESTAMP WITH TIME ZONE DEFAULT NOW()
-);
-
--- NOTE: DO NOT create redemptions here (kept in 005 with enums)
-
--- helper indexes
-CREATE INDEX IF NOT EXISTS idx_users_wallet_lower ON users (lower(wallet_address));
-CREATE INDEX IF NOT EXISTS idx_admins_wallet_lower ON admins (lower(wallet_address));
-CREATE INDEX IF NOT EXISTS idx_rm_balances_user ON rm_balances (user_id);
-CREATE INDEX IF NOT EXISTS idx_oumg_balances_user ON oumg_balances (user_id);
-CREATE INDEX IF NOT EXISTS idx_token_ops_user ON token_ops (user_id);
-CREATE INDEX IF NOT EXISTS idx_gold_ledger_date ON gold_ledger (entry_date);
-
--- optional seed (change to your address)
--- INSERT INTO admins(wallet_address, role)
--- VALUES ('0x21Dd60982155a0182d94bcAAACC1C61550c99C69', 'SUPERADMIN')
--- ON CONFLICT (wallet_address) DO NOTHING;
+CREATE INDEX IF NOT EXISTS idx_admin_audit_wallet_lower ON admin_audit_logs (lower(admin_wallet));
+CREATE INDEX IF NOT EXISTS idx_admin_audit_action       ON admin_audit_logs (action);
+CREATE INDEX IF NOT EXISTS idx_admin_audit_created      ON admin_audit_logs (created_at DESC);
