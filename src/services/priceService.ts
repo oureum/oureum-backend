@@ -1,19 +1,24 @@
-// src/services/priceService.ts
 import { query } from "../db";
+import { fetchWithTimeout } from "../utils/http";
 
 /** Troy ounce to gram conversion constant. */
 const OUNCE_TO_GRAM = 31.1034768;
 
-/** Optional per-side bps. */
+/** Optional per-side bps from env. */
 const BUY_BPS  = Number(process.env.PRICE_BUY_BPS  || 0);  // applied on user BUY
 const SELL_BPS = Number(process.env.PRICE_SELL_BPS || 0);  // applied on user SELL
 
-/** Manual fallback base (MYR/g) when table empty and BNM fails or PRICE_MODE=manual. */
+/** Manual fallback base (MYR/g) when no valid snapshot and BNM fails or PRICE_MODE=manual. */
 const MANUAL_BASE = Number(process.env.PRICE_MANUAL_MYR_PER_G || 500);
 
 /** BNM endpoint + headers. */
 const BNM_URL = "https://api.bnm.gov.my/public/kijang-emas";
 const BNM_ACCEPT = "application/vnd.BNM.API.v1+json";
+
+/** Fetch settings (configurable in .env). */
+const FETCH_TIMEOUT_MS = Number(process.env.PRICE_FETCH_TIMEOUT_MS || 8000);
+const FETCH_RETRIES    = Number(process.env.PRICE_FETCH_RETRIES || 2);
+const FETCH_RETRY_WAIT = Number(process.env.PRICE_FETCH_RETRY_DELAY_MS || 1500);
 
 type InsertSnapshotParams = {
   source: string; // "manual" | "bnm-kijang-emas" | "external"
@@ -22,12 +27,12 @@ type InsertSnapshotParams = {
   bnm_myr_per_oz_buying?: number | null;
   bnm_myr_per_oz_selling?: number | null;
 
-  // per-gram prices (after bps if applicable)
-  myr_per_g_buy: number;   // NOT NULL in practice (we ensure it)
-  myr_per_g_sell: number;  // NOT NULL in practice
+  // per-gram prices (after bps if applicable) - required for insert
+  myr_per_g_buy: number;
+  myr_per_g_sell: number;
 
-  // stored to satisfy legacy NOT NULL constraint
-  computed_myr_per_g: number; // = (buy+sell)/2, ALWAYS filled
+  // to satisfy legacy NOT NULL constraint
+  computed_myr_per_g: number; // = (buy+sell)/2
 
   buy_bps_applied?: number | null;
   sell_bps_applied?: number | null;
@@ -50,8 +55,16 @@ export class PriceService {
     myr_per_oz_buying: number | null;
     myr_per_oz_selling: number | null;
   }> {
-    const res = await fetch(BNM_URL, { headers: { Accept: BNM_ACCEPT }, cache: "no-store" });
-    if (!res.ok) throw new Error(`BNM HTTP ${res.status}`);
+    const res = await fetchWithTimeout(
+      BNM_URL,
+      { headers: { Accept: BNM_ACCEPT }, cache: "no-store", timeoutMs: FETCH_TIMEOUT_MS },
+      FETCH_RETRIES,
+      FETCH_RETRY_WAIT
+    );
+    if (!res.ok) {
+      const body = await res.text().catch(() => "");
+      throw new Error(`BNM HTTP ${res.status} ${res.statusText} | body: ${body.slice(0,200)}`);
+    }
     const json = (await res.json()) as BnmResponse;
     return {
       effective_date: json?.data?.effective_date ?? null,
@@ -66,8 +79,11 @@ export class PriceService {
     myr_per_oz_buying: number | null;
     myr_per_oz_selling: number | null;
   }): { buy: number | null; sell: number | null } {
-    const rawBuy  = opts.myr_per_oz_selling != null ? opts.myr_per_oz_selling / OUNCE_TO_GRAM : null; // user BUY from BNM selling
-    const rawSell = opts.myr_per_oz_buying  != null ? opts.myr_per_oz_buying  / OUNCE_TO_GRAM : null; // user SELL from BNM buying
+    // user BUY from BNM selling
+    const rawBuy  = opts.myr_per_oz_selling != null ? opts.myr_per_oz_selling / OUNCE_TO_GRAM : null;
+    // user SELL from BNM buying
+    const rawSell = opts.myr_per_oz_buying  != null ? opts.myr_per_oz_buying  / OUNCE_TO_GRAM : null;
+
     const buy  = rawBuy  != null ? +(rawBuy  * (1 + BUY_BPS  / 10_000)).toFixed(6) : null;
     const sell = rawSell != null ? +(rawSell * (1 + SELL_BPS / 10_000)).toFixed(6) : null;
     return { buy, sell };

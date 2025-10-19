@@ -1,4 +1,3 @@
-// src/jobs/priceCron.ts
 import cron from "node-cron";
 import { PriceService } from "../services/priceService";
 import { logger } from "../logger";
@@ -46,7 +45,8 @@ async function runOnce() {
 
 /** Start cron if ENABLE_PRICE_CRON=true (every 30 minutes, plus an immediate run). */
 export function startPriceCron() {
-  if (String(process.env.ENABLE_PRICE_CRON).toLowerCase() !== "true") {
+  const enabled = String(process.env.ENABLE_PRICE_CRON || "").toLowerCase() === "true";
+  if (!enabled) {
     logger.info("Price cron disabled");
     return;
   }
@@ -55,9 +55,14 @@ export function startPriceCron() {
   runOnce().catch(() => { /* already logged inside */ });
 
   // then schedule every 30 minutes (UTC)
-  cron.schedule("*/30 * * * *", () => {
-    runOnce().catch(() => { /* already logged inside */ });
-  }, { timezone: "UTC" });
+  const spec = process.env.PRICE_CRON_SPEC || "*/30 * * * *";
+  cron.schedule(
+    spec,
+    () => {
+      runOnce().catch(() => { /* already logged inside */ });
+    },
+    { timezone: "UTC" }
+  );
 
-  logger.info("Price cron started (*/30 * * * * UTC)");
+  logger.info(`Price cron started (${spec} UTC)`);
 }

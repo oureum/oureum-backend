@@ -1,78 +1,63 @@
-import { Oumg, Info, Price } from "./eth";
+/**
+ * Temporary placeholder for OUMG chain operations.
+ * Provides fake data for local/off-chain testing.
+ */
+
+function fakeHash() {
+  return "0x" + Math.random().toString(16).slice(2).padEnd(64, "0");
+}
+
+/** In-memory paused flag. */
+let _paused = false;
 
 export const OumgService = {
-  // read
+  /** Fake ERC20-style metadata. */
   async getTokenMeta() {
-    const [name, symbol, decimals, totalSupply] = await Promise.all([
-      Oumg.name(),
-      Oumg.symbol(),
-      Oumg.decimals(),
-      Oumg.totalSupply(),
-    ]);
-    return { name, symbol, decimals: Number(decimals), totalSupply: totalSupply.toString() };
-  },
-
-  async getPrice() {
-    const [buy, sell, ts, dec] = await Promise.all([
-      Price.buyMyrPerG(),
-      Price.sellMyrPerG(),
-      Price.lastUpdated(),
-      Price.decimals(),
-    ]);
     return {
-      buyMyrPerG: buy.toString(),   // 6 decimals string
-      sellMyrPerG: sell.toString(), // 6 decimals string
-      lastUpdated: Number(ts),
-      decimals: Number(dec),
+      name: "Oureum Gold Token",
+      symbol: "OUMG",
+      decimals: 8,
+      totalSupply: "100000000000000", // 1 million * 1e8
+      address: process.env.OUMG_ADDRESS || "0x0000000000000000000000000000000000000000",
     };
   },
 
+  /** Fake OUMG Info contract data. */
   async getInfo() {
-    const [
-      weightUnit, purityPpm, custodyType, spreadBps,
-      redemptionMinGram, redemptionFeeBps, redemptionMinUnitMg,
-      goldSource, vaultLocation, insuranceNote, auditRef,
-      priceFeedSource, serialPolicy, ipfsCID
-    ] = await Promise.all([
-      Info.weightUnit(),
-      Info.purityPpm(),
-      Info.custodyType(),
-      Info.spreadBps(),
-      Info.redemptionMinGram(),
-      Info.redemptionFeeBps(),
-      Info.redemptionMinUnitMg(),
-      Info.goldSource(),
-      Info.vaultLocation(),
-      Info.insuranceNote(),
-      Info.auditRef(),
-      Info.priceFeedSource(),
-      Info.serialPolicy(),
-      Info.ipfsCID(),
-    ]);
-
     return {
-      weightUnit,
-      purityPpm: Number(purityPpm),
-      custodyType: Number(custodyType), // 0=UNALLOCATED,1=ALLOCATED
-      spreadBps: Number(spreadBps),
-      redemptionMinGram: Number(redemptionMinGram),
-      redemptionFeeBps: Number(redemptionFeeBps),
-      redemptionMinUnitMg: Number(redemptionMinUnitMg),
-      goldSource,
-      vaultLocation,
-      insuranceNote,
-      auditRef,
-      priceFeedSource,
-      serialPolicy,
-      ipfsCID,
+      totalGoldGrams: 12345.6789,
+      totalUsers: 10,
+      version: "test-mock",
+      lastUpdated: new Date().toISOString(),
     };
   },
 
-  // write (admin)
-  async setPrice({ buyMyrPerG, sellMyrPerG }: { buyMyrPerG: string; sellMyrPerG: string; }) {
-    // buy/sell are strings of integer in 6 decimals (e.g., "500000000")
-    const tx = await Price.setPrice(buyMyrPerG, sellMyrPerG);
-    const rc = await tx.wait();
-    return { txHash: rc?.hash ?? tx.hash };
+  /** Mint placeholder (admin only). */
+  async mint(to: string, grams: number) {
+    if (_paused) throw new Error("Contract is paused");
+    return { txHash: fakeHash(), to, grams };
+  },
+
+  /** Burn placeholder (admin only). */
+  async burn(from: string, grams: number) {
+    if (_paused) throw new Error("Contract is paused");
+    return { txHash: fakeHash(), from, grams };
+  },
+
+  /** Read paused() */
+  async paused() {
+    return { paused: _paused };
+  },
+
+  /** Pause contract (admin-only in real version). */
+  async pause() {
+    _paused = true;
+    return { txHash: fakeHash(), paused: _paused };
+  },
+
+  /** Unpause contract (admin-only in real version). */
+  async unpause() {
+    _paused = false;
+    return { txHash: fakeHash(), paused: _paused };
   },
 };
