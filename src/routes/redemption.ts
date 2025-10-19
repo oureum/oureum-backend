@@ -1,18 +1,21 @@
-import express from "express";
+// src/routes/redemption.ts
+import { Router } from "express";
 import { adminGuard } from "../middlewares/authMiddleware";
-import { createRedemptionHandler, updateStatusHandler, listByUserHandler, listAllHandler } from "../controllers/redemptionController";
-import { validateBody, validateQuery } from "../middlewares/validate";
-import { redemptionCreateSchema, redemptionUpdateSchema, getBalancesQuerySchema, paginationQuerySchema } from "../schemas";
+import {
+  createRedemption,
+  listRedemption,
+  updateRedemption,
+} from "../controllers/redemptionController";
 
-const router = express.Router();
+const router = Router();
 
-// user endpoints (public)
-router.post("/create", validateBody(redemptionCreateSchema), createRedemptionHandler);
-router.get("/user", validateQuery(getBalancesQuerySchema), listByUserHandler);
+/** Public: user creates a redemption request */
+router.post("/", createRedemption);
 
-// admin endpoints
-router.use(adminGuard);
-router.post("/update-status", validateBody(redemptionUpdateSchema), updateStatusHandler);
-router.get("/all", validateQuery(paginationQuerySchema), listAllHandler);
+/** Admin: list redemptions (optional ?status=&limit=&offset=) */
+router.get("/", adminGuard, listRedemption);
+
+/** Admin: update redemption status */
+router.patch("/:id", adminGuard, updateRedemption);
 
 export default router;

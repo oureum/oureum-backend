@@ -1,25 +1,44 @@
+// src/jobs/priceCron.ts
 import cron from "node-cron";
-import { config } from "../config";
 import { PriceService } from "../services/priceService";
 import { logger } from "../logger";
 
-/**
- * Periodically refresh price snapshot (manual/external placeholder).
- * This mainly demonstrates how you could schedule price sampling.
- */
+/** Pull BNM Kijang Emas hourly and insert a snapshot. */
 export function startPriceCron() {
-  if (!config.enablePriceCron) {
-    logger.info("Price cron disabled");
-    return;
-  }
-  logger.info({ expr: config.priceCronExpr }, "Starting price cron");
-
-  cron.schedule(config.priceCronExpr, async () => {
+  // At minute 5 of every hour
+  cron.schedule("5 * * * *", async () => {
     try {
-      const { price_myr_per_g } = await PriceService.getCurrentMyrPerGram();
-      logger.info({ price_myr_per_g }, "Price snapshot recorded by cron");
-    } catch (err: any) {
-      logger.error({ err }, "Price cron failed");
+      const bnm = await PriceService.fetchBnmKijangEmas();
+      const grams = PriceService.ozToGramWithBps({
+        myr_per_oz_buying: bnm.myr_per_oz_buying,
+        myr_per_oz_selling: bnm.myr_per_oz_selling,
+      });
+
+      await PriceService.insertSnapshot({
+        source: "bnm-kijang-emas",
+        effective_date: bnm.effective_date,
+        last_updated: bnm.last_updated,
+        bnm_myr_per_oz_buying: bnm.myr_per_oz_buying,
+        bnm_myr_per_oz_selling: bnm.myr_per_oz_selling,
+        myr_per_g_buy: grams.myr_per_g_buy,
+        myr_per_g_sell: grams.myr_per_g_sell,
+        buy_bps_applied: Number(process.env.PRICE_BUY_BPS || 0),
+        sell_bps_applied: Number(process.env.PRICE_SELL_BPS || 0),
+        note: null,
+      });
+
+      logger.info(
+        {
+          source: "bnm-kijang-emas",
+          effective_date: bnm.effective_date,
+          last_updated: bnm.last_updated,
+          myr_per_g_buy: grams.myr_per_g_buy,
+          myr_per_g_sell: grams.myr_per_g_sell,
+        },
+        "Price cron: snapshot inserted"
+      );
+    } catch (e: any) {
+      logger.error({ err: e?.message }, "Price cron failed");
     }
   });
 }

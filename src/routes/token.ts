@@ -1,15 +1,15 @@
-import express from "express";
-import { adminGuard } from "../middlewares/authMiddleware";
-import { buyMintHandler, sellBurnHandler } from "../controllers/tokenController";
-import { validateBody } from "../middlewares/validate";
-import { buyMintSchema, sellBurnSchema } from "../schemas";
+import { Router } from "express";
+import { authRequired } from "../middlewares/authMiddleware";
 import { rateLimit } from "../middlewares/rateLimit";
+import { buyMintHandler, sellBurnHandler, listTokenOps } from "../controllers/tokenController";
 
-const router = express.Router();
-router.use(adminGuard);
+const router = Router();
 
-// add lightweight rate limit to sensitive endpoints
-router.post("/buy-mint", rateLimit(), validateBody(buyMintSchema), buyMintHandler);
-router.post("/sell-burn", rateLimit(), validateBody(sellBurnSchema), sellBurnHandler);
+// Admin-only, rate-limited
+router.post("/buy-mint", authRequired, rateLimit(30, 60), buyMintHandler);
+router.post("/sell-burn", authRequired, rateLimit(30, 60), sellBurnHandler);
+
+// Admin list all token ops (pagination)
+router.get("/ops", authRequired, listTokenOps);
 
 export default router;
