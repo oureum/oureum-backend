@@ -31,29 +31,12 @@ WITH dup AS (
 DELETE FROM oumg_balances USING dup
 WHERE oumg_balances.id = dup.id AND dup.rn > 1;
 
--- Enforce unique (one row per user) — Postgres doesn't support "ADD CONSTRAINT IF NOT EXISTS"
-DO $$
-BEGIN
-  IF NOT EXISTS (
-    SELECT 1
-    FROM pg_constraint
-    WHERE conname = 'uq_rm_balances_user'
-      AND conrelid = 'rm_balances'::regclass
-  ) THEN
-    ALTER TABLE rm_balances
-      ADD CONSTRAINT uq_rm_balances_user UNIQUE (user_id);
-  END IF;
+-- Enforce unique (one row per user)
+ALTER TABLE rm_balances
+  ADD CONSTRAINT IF NOT EXISTS uq_rm_balances_user UNIQUE (user_id);
 
-  IF NOT EXISTS (
-    SELECT 1
-    FROM pg_constraint
-    WHERE conname = 'uq_oumg_balances_user'
-      AND conrelid = 'oumg_balances'::regclass
-  ) THEN
-    ALTER TABLE oumg_balances
-      ADD CONSTRAINT uq_oumg_balances_user UNIQUE (user_id);
-  END IF;
-END $$;
+ALTER TABLE oumg_balances
+  ADD CONSTRAINT IF NOT EXISTS uq_oumg_balances_user UNIQUE (user_id);
 
 -- Helper view for dashboard/APIs
 CREATE OR REPLACE VIEW v_user_balances AS
