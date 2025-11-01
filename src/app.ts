@@ -16,7 +16,6 @@ import userRoutes from "./routes/user";
 
 import { startPriceCron } from "./jobs/priceCron";
 
-// Swagger / OpenAPI
 import swaggerUi from "swagger-ui-express";
 import { swaggerSpec, attachPathsToSpec } from "./swagger";
 import { getAbsoluteFSPath } from "swagger-ui-dist";
@@ -58,17 +57,17 @@ app.use("/api/user", userRoutes);
 app.get("/healthz", (_req, res) => res.json({ ok: true }));
 app.get("/readyz", (_req, res) => res.json({ ready: true }));
 
-/** Swagger UI (fix MIME issues on Vercel)
- * 1) attach dynamic paths to the spec
- * 2) serve swagger-ui-dist static assets under /docs/static (correct Content-Type)
- * 3) mount /docs using those local assets
+/** Swagger UI
+ * We expose docs at BOTH:
+ *   - /docs (for classic servers / local)
+ *   - /api/docs (so Vercel rewrites can hit the same serverless function)
+ * Static assets are mounted under both prefixes to ensure correct MIME.
  */
 attachPathsToSpec();
 
+// --- Local/Classic paths ---
 app.use("/docs/static", express.static(getAbsoluteFSPath()));
-
 app.get("/openapi.json", (_req, res) => res.json(swaggerSpec));
-
 app.use(
   "/docs",
   swaggerUi.serve,
@@ -78,10 +77,23 @@ app.use(
       "/docs/static/swagger-ui-bundle.js",
       "/docs/static/swagger-ui-standalone-preset.js",
     ],
-    swaggerOptions: {
-      docExpansion: "none",
-      defaultModelsExpandDepth: -1,
-    },
+    swaggerOptions: { docExpansion: "none", defaultModelsExpandDepth: -1 },
+  }),
+);
+
+// --- Vercel-friendly paths under /api/... ---
+app.use("/api/docs/static", express.static(getAbsoluteFSPath()));
+app.get("/api/openapi.json", (_req, res) => res.json(swaggerSpec));
+app.use(
+  "/api/docs",
+  swaggerUi.serve,
+  swaggerUi.setup(swaggerSpec, {
+    customCssUrl: "/api/docs/static/swagger-ui.css",
+    customJs: [
+      "/api/docs/static/swagger-ui-bundle.js",
+      "/api/docs/static/swagger-ui-standalone-preset.js",
+    ],
+    swaggerOptions: { docExpansion: "none", defaultModelsExpandDepth: -1 },
   }),
 );
 
@@ -89,16 +101,14 @@ app.use(
 app.use(notFound);
 app.use(errorHandler);
 
-/** Cron jobs
- * Avoid running cron in Vercel serverless runtime.
- */
+/** Cron: avoid running in Vercel serverless runtime */
 if (process.env.VERCEL !== "1") {
   startPriceCron();
 }
 
 export default app;
 
-/** Local dev server (not used by Vercel) */
+// (Optional local server; Vercel won't use this)
 if (process.env.VERCEL !== "1" && process.env.NODE_ENV !== "test") {
   const port = Number(process.env.PORT || 4000);
   app.listen(port, () => {
