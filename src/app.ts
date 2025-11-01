@@ -73,10 +73,11 @@ app.use(
   "/docs",
   swaggerUi.serve,
   swaggerUi.setup(swaggerSpec, {
-    customCssUrl: "/docs/static/swagger-ui.css",
+    // IMPORTANT: use CDN so the page never requests /docs/swagger-ui.css or /docs/static/*
+    customCssUrl: "https://unpkg.com/swagger-ui-dist/swagger-ui.css",
     customJs: [
-      "/docs/static/swagger-ui-bundle.js",
-      "/docs/static/swagger-ui-standalone-preset.js",
+      "https://unpkg.com/swagger-ui-dist/swagger-ui-bundle.js",
+      "https://unpkg.com/swagger-ui-dist/swagger-ui-standalone-preset.js",
     ],
     swaggerOptions: {
       docExpansion: "none",
