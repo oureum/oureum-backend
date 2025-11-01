@@ -10,15 +10,26 @@
 CREATE TABLE IF NOT EXISTS price_snapshots (
   id                 BIGSERIAL PRIMARY KEY,
   source             TEXT NOT NULL,                -- "manual" | "bnm" | "external"
-  gold_usd_per_oz    NUMERIC(18,6),                -- nullable
-  fx_usd_to_myr      NUMERIC(18,6),                -- nullable
+  gold_usd_per_oz    NUMERIC(18,6),                -- nullable (legacy, kept)
+  fx_usd_to_myr      NUMERIC(18,6),                -- nullable (legacy, kept)
   computed_myr_per_g NUMERIC(18,6) NOT NULL,       -- base MYR/g after FX/oz->g
   markup_bps         INTEGER DEFAULT 0,            -- global markup (bps)
-  note               TEXT,
-  -- new columns (safe on fresh create; will be added via ALTER for existing DBs):
+  note               TEXT,                         -- free-form note
+
+  -- newer columns used by services/cron
   effective_date     DATE,                         -- e.g. BNM effective date
-  buy_myr_per_g      NUMERIC(18,6),                -- user buy (what user pays)
-  sell_myr_per_g     NUMERIC(18,6),                -- user sell (what user receives)
+  buy_myr_per_g      NUMERIC(18,6),                -- user BUY (what user pays)
+  sell_myr_per_g     NUMERIC(18,6),                -- user SELL (what user receives)
+  last_updated       TEXT,                         -- vendor-provided "last updated" (BNM meta)
+
+  -- optional vendor raw fields for audit/debug
+  bnm_myr_per_oz_buying  NUMERIC(18,6),
+  bnm_myr_per_oz_selling NUMERIC(18,6),
+
+  -- per-side bps actually applied
+  buy_bps_applied   INTEGER,
+  sell_bps_applied  INTEGER,
+
   created_at         TIMESTAMP WITH TIME ZONE DEFAULT NOW()
 );
 
@@ -29,11 +40,23 @@ CREATE INDEX IF NOT EXISTS idx_price_snapshots_source     ON price_snapshots (so
 
 -- Backward-compatible ALTERs (safe if columns already exist)
 ALTER TABLE price_snapshots
-  ADD COLUMN IF NOT EXISTS effective_date DATE;
+  ADD COLUMN IF NOT EXISTS effective_date          DATE;
 ALTER TABLE price_snapshots
-  ADD COLUMN IF NOT EXISTS buy_myr_per_g  NUMERIC(18,6);
+  ADD COLUMN IF NOT EXISTS buy_myr_per_g           NUMERIC(18,6);
 ALTER TABLE price_snapshots
-  ADD COLUMN IF NOT EXISTS sell_myr_per_g NUMERIC(18,6);
+  ADD COLUMN IF NOT EXISTS sell_myr_per_g          NUMERIC(18,6);
+ALTER TABLE price_snapshots
+  ADD COLUMN IF NOT EXISTS last_updated            TEXT;
+ALTER TABLE price_snapshots
+  ADD COLUMN IF NOT EXISTS bnm_myr_per_oz_buying   NUMERIC(18,6);
+ALTER TABLE price_snapshots
+  ADD COLUMN IF NOT EXISTS bnm_myr_per_oz_selling  NUMERIC(18,6);
+ALTER TABLE price_snapshots
+  ADD COLUMN IF NOT EXISTS buy_bps_applied         INTEGER;
+ALTER TABLE price_snapshots
+  ADD COLUMN IF NOT EXISTS sell_bps_applied        INTEGER;
+ALTER TABLE price_snapshots
+  ADD COLUMN IF NOT EXISTS note                    TEXT;
 
 -- 2) Admin audit logs
 CREATE TABLE IF NOT EXISTS admin_audit_logs (

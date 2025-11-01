@@ -16,17 +16,18 @@ import userRoutes from "./routes/user";
 
 import { startPriceCron } from "./jobs/priceCron";
 
+// ➕ Swagger
 import swaggerUi from "swagger-ui-express";
 import { swaggerSpec, attachPathsToSpec } from "./swagger";
 
 const app = express();
 
-/** Global middlewares */
+// basic middlewares
 app.use(express.json());
 app.use(requestId);
 app.use(securityMiddlewares);
 
-/** Request logger */
+// a simple request logger
 app.use((req, _res, next) => {
   logger.info(
     {
@@ -42,7 +43,7 @@ app.use((req, _res, next) => {
   next();
 });
 
-/** API routes */
+// routes
 app.use("/api/auth", authRoutes);
 app.use("/api/admin", adminRoutes);
 app.use("/api/ledger", ledgerRoutes);
@@ -50,51 +51,22 @@ app.use("/api/token", tokenRoutes);
 app.use("/api/redemption", redemptionRoutes);
 app.use("/api/price", priceRoutes);
 app.use("/api/chain", chainRoutes);
-app.use("/api/user", userRoutes);
+app.use("/api/user", userRoutes); // ← moved here (before 404)
 
-/** Health endpoints */
+// health endpoints
 app.get("/healthz", (_req, res) => res.json({ ok: true }));
 app.get("/readyz", (_req, res) => res.json({ ready: true }));
 
-/** Swagger UI under /api/docs (CDN assets to avoid MIME issues) */
-attachPathsToSpec();
+// Swagger docs
+attachPathsToSpec(); // populate paths
+app.use("/docs", swaggerUi.serve, swaggerUi.setup(swaggerSpec));
+app.get("/openapi.json", (_req, res) => res.json(swaggerSpec));
 
-// OpenAPI JSON exposed at /api/openapi.json
-app.get("/api/openapi.json", (_req, res) => res.json(swaggerSpec));
-
-// Swagger UI page at /api/docs, using CDN assets (no local static hosting)
-app.use(
-  "/api/docs",
-  swaggerUi.serve,
-  swaggerUi.setup(swaggerSpec, {
-    customCssUrl: "https://unpkg.com/swagger-ui-dist/swagger-ui.css",
-    customJs: [
-      "https://unpkg.com/swagger-ui-dist/swagger-ui-bundle.js",
-      "https://unpkg.com/swagger-ui-dist/swagger-ui-standalone-preset.js",
-    ],
-    swaggerOptions: {
-      docExpansion: "none",
-      defaultModelsExpandDepth: -1,
-    },
-  }),
-);
-
-/** 404 + Error handler */
+// 404 and error
 app.use(notFound);
 app.use(errorHandler);
 
-/** Cron: avoid running in Vercel serverless runtime */
-if (process.env.VERCEL !== "1") {
-  startPriceCron();
-}
+// cron
+startPriceCron();
 
 export default app;
-
-/** Optional local server (Vercel won't use this) */
-if (process.env.VERCEL !== "1" && process.env.NODE_ENV !== "test") {
-  const port = Number(process.env.PORT || 4000);
-  app.listen(port, () => {
-    console.log(`API listening at http://localhost:${port}`);
-    console.log(`Swagger UI at http://localhost:${port}/api/docs`);
-  });
-}
