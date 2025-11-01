@@ -73,15 +73,20 @@ app.use(
   "/docs",
   swaggerUi.serve,
   swaggerUi.setup(swaggerSpec, {
-    // IMPORTANT: use CDN so the page never requests /docs/swagger-ui.css or /docs/static/*
     customCssUrl: "https://unpkg.com/swagger-ui-dist/swagger-ui.css",
     customJs: [
       "https://unpkg.com/swagger-ui-dist/swagger-ui-bundle.js",
       "https://unpkg.com/swagger-ui-dist/swagger-ui-standalone-preset.js",
     ],
     swaggerOptions: {
-      docExpansion: "none",
-      defaultModelsExpandDepth: -1,
+      // Expand all tags + operations by default
+      docExpansion: "full",              // "none" | "list" | "full"
+      // Hide the Models panel (keeps the page focused on endpoints)
+      defaultModelsExpandDepth: -1,      // -1 hides Models section
+      // Optional UX tweaks (nice to have)
+      tryItOutEnabled: true,             // enable "Try it out" by default
+      displayRequestDuration: true,      // show request duration
+      deepLinking: true                  // allow direct links to operations
     },
   }),
 );
