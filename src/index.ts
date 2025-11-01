@@ -1,3 +1,4 @@
+// src/index.ts
 import dotenv from "dotenv";
 dotenv.config();
 
@@ -6,6 +7,9 @@ import { logger } from "./logger";
 
 const PORT = Number(process.env.PORT || 4000);
 
-app.listen(PORT, () => {
-  logger.info({ port: PORT }, `🚀 Oureum backend running on http://localhost:${PORT}`);
-});
+// Only start a real HTTP server when not running on Vercel
+if (process.env.VERCEL !== "1") {
+  app.listen(PORT, () => {
+    logger.info({ port: PORT }, `🚀 Oureum backend running on http://localhost:${PORT}`);
+  });
+}

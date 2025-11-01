@@ -10,7 +10,11 @@ export const swaggerSpec = swaggerJSDoc({
       description:
         "Oureum Admin & User API. Admin endpoints require x-admin-wallet header.",
     },
-    servers: [{ url: "http://localhost:4000", description: "Local" }],
+    servers: [
+      // Add prod domain so 'Try it out' points to prod by default when deployed
+      { url: "https://api.oureum.com", description: "Prod" },
+      { url: "http://localhost:4000", description: "Local" }
+    ],
     components: {
       securitySchemes: {
         AdminWalletHeader: {
