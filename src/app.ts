@@ -1,4 +1,5 @@
 import express from "express";
+import cors, { CorsOptions } from "cors";
 import { requestId } from "./middlewares/requestId";
 import { securityMiddlewares } from "./middlewares/security";
 import { errorHandler, notFound } from "./middlewares/errorHandler";
@@ -23,12 +24,51 @@ import { getAbsoluteFSPath } from "swagger-ui-dist";
 
 const app = express();
 
-/** Global middlewares */
+/* -----------------------------
+   ✅ CORS setup (Express v5 safe)
+----------------------------- */
+const rawAllowList =
+  process.env.ADMIN_ORIGINS?.split(",").map(s => s.trim()).filter(Boolean) || [];
+const defaultDev = "http://localhost:3000";
+const allowList = Array.from(new Set([...rawAllowList, defaultDev]));
+
+const corsOptions: CorsOptions = {
+  origin(origin, cb) {
+    // Allow Postman/curl (no Origin) and allowlisted origins
+    if (!origin) return cb(null, true);
+    if (allowList.includes(origin)) return cb(null, true);
+    return cb(new Error(`Not allowed by CORS: ${origin}`));
+  },
+  credentials: false, // we don't send cookies
+  methods: ["GET", "POST", "PATCH", "DELETE", "OPTIONS"],
+  allowedHeaders: ["Content-Type", "x-admin-wallet"],
+  maxAge: 86400,
+};
+
+// Apply CORS globally
+app.use(cors(corsOptions));
+
+// Explicit OPTIONS handler (avoid path-to-regexp bug)
+app.use((req, res, next) => {
+  if (req.method === "OPTIONS") {
+    res.header("Access-Control-Allow-Origin", req.headers.origin || "");
+    res.header("Access-Control-Allow-Methods", "GET,POST,PATCH,DELETE,OPTIONS");
+    res.header("Access-Control-Allow-Headers", "Content-Type, x-admin-wallet");
+    return res.sendStatus(204);
+  }
+  next();
+});
+
+/* -----------------------------
+   Global Middlewares
+----------------------------- */
 app.use(express.json());
 app.use(requestId);
 app.use(securityMiddlewares);
 
-/** Request logger */
+/* -----------------------------
+   Request logger
+----------------------------- */
 app.use((req, _res, next) => {
   logger.info(
     {
@@ -39,12 +79,14 @@ app.use((req, _res, next) => {
         ip: req.ip,
       },
     },
-    "Incoming request",
+    "Incoming request"
   );
   next();
 });
 
-/** API routes */
+/* -----------------------------
+   API Routes
+----------------------------- */
 app.use("/api/auth", authRoutes);
 app.use("/api/admin", adminRoutes);
 app.use("/api/ledger", ledgerRoutes);
@@ -54,19 +96,17 @@ app.use("/api/price", priceRoutes);
 app.use("/api/chain", chainRoutes);
 app.use("/api/user", userRoutes);
 
-/** Health endpoints */
+/* -----------------------------
+   Health check
+----------------------------- */
 app.get("/healthz", (_req, res) => res.json({ ok: true }));
 app.get("/readyz", (_req, res) => res.json({ ready: true }));
 
-/** Swagger UI (fix MIME issues on Vercel)
- * 1) attach dynamic paths to the spec
- * 2) serve swagger-ui-dist static assets under /docs/static (correct Content-Type)
- * 3) mount /docs using those local assets
- */
+/* -----------------------------
+   Swagger UI setup
+----------------------------- */
 attachPathsToSpec();
-
 app.use("/docs/static", express.static(getAbsoluteFSPath()));
-
 app.get("/openapi.json", (_req, res) => res.json(swaggerSpec));
 
 app.use(
@@ -79,36 +119,38 @@ app.use(
       "https://unpkg.com/swagger-ui-dist/swagger-ui-standalone-preset.js",
     ],
     swaggerOptions: {
-      // Expand all tags + operations by default
-      docExpansion: "full",              // "none" | "list" | "full"
-      // Hide the Models panel (keeps the page focused on endpoints)
-      defaultModelsExpandDepth: -1,      // -1 hides Models section
-      // Optional UX tweaks (nice to have)
-      tryItOutEnabled: true,             // enable "Try it out" by default
-      displayRequestDuration: true,      // show request duration
-      deepLinking: true                  // allow direct links to operations
+      docExpansion: "full",
+      defaultModelsExpandDepth: -1,
+      tryItOutEnabled: true,
+      displayRequestDuration: true,
+      deepLinking: true,
     },
-  }),
+  })
 );
 
-/** 404 + Error handler */
+/* -----------------------------
+   Error handling
+----------------------------- */
 app.use(notFound);
 app.use(errorHandler);
 
-/** Cron jobs
- * Avoid running cron in Vercel serverless runtime.
- */
+/* -----------------------------
+   Cron jobs
+----------------------------- */
 if (process.env.VERCEL !== "1") {
   startPriceCron();
 }
 
+/* -----------------------------
+   Export + Local Dev
+----------------------------- */
 export default app;
 
-/** Local dev server (not used by Vercel) */
 if (process.env.VERCEL !== "1" && process.env.NODE_ENV !== "test") {
   const port = Number(process.env.PORT || 4000);
   app.listen(port, () => {
     console.log(`API listening at http://localhost:${port}`);
     console.log(`Swagger UI at http://localhost:${port}/docs`);
+    console.log(`CORS allowlist: ${allowList.join(", ") || "(none)"}`);
   });
 }
