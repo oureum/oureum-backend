@@ -1,11 +1,12 @@
+// src/middlewares/security.ts
 import helmet from "helmet";
-import cors from "cors";
 import compression from "compression";
-import { config } from "../config";
 
-/** Wrap recommended security & performance middlewares. */
+/**
+ * Keep security/perf middlewares simple.
+ * CORS is handled centrally in app.ts (allowlist + OPTIONS), so DO NOT add cors() here.
+ */
 export const securityMiddlewares = [
   helmet(),
-  cors({ origin: config.corsOrigin, credentials: true }),
   compression(),
 ];
