@@ -9,15 +9,16 @@ import { query } from "../db";
  */
 export async function adminGuard(req: Request, res: Response, next: NextFunction) {
   try {
-    const wallet = String(req.header("x-admin-wallet") || "").trim();
+    const wallet = String(req.header("x-admin-wallet") || "").toLowerCase().trim();
     if (!wallet) {
       return res.status(401).json({ error: "Missing x-admin-wallet header" });
     }
 
+    // DB whitelist check
     const sql = `SELECT 1 FROM admins WHERE lower(wallet_address)=lower($1) LIMIT 1`;
     const { rows } = await query(sql, [wallet]);
     if (!rows.length) {
-      return res.status(403).json({ error: "Not authorized (not in admin whitelist)" });
+      return res.status(403).json({ error: "Not authorized (wallet not in admin whitelist)" });
     }
 
     (req as any).adminWallet = wallet;
@@ -31,7 +32,6 @@ export async function adminGuard(req: Request, res: Response, next: NextFunction
  * AuthRequired - ENV-based fallback guard (for local/dev)
  * ------------------------------------------------------
  * Checks x-admin-wallet header against ADMIN_WALLETS in .env.
- * Expected Header: { "x-admin-wallet": "0x1234..." }
  */
 export function authRequired(req: Request, res: Response, next: NextFunction) {
   const wallet = String(req.header("x-admin-wallet") || "").toLowerCase().trim();
@@ -40,9 +40,8 @@ export function authRequired(req: Request, res: Response, next: NextFunction) {
   }
 
   const list = String(process.env.ADMIN_WALLETS || "")
-    .toLowerCase()
-    .split(",")
-    .map((s) => s.trim())
+    .split(/[,\s]+/)
+    .map(s => s.trim().toLowerCase())
     .filter(Boolean);
 
   if (!list.includes(wallet)) {
