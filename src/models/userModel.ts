@@ -1,3 +1,4 @@
+// src/models/userModel.ts
 import { query } from "../db";
 
 /**
@@ -65,8 +66,6 @@ export async function listUsersWithBalances(
     where = `WHERE lower(u.wallet_address) LIKE $${params.length}`;
   }
 
-  // rm_spent is often a derived metric (sum of purchases).
-  // If you do not maintain a purchases table, we alias 0 for now.
   const sql = `
     SELECT
       u.id,
@@ -75,7 +74,7 @@ export async function listUsersWithBalances(
       0::numeric               AS rm_spent,   -- alias 0 if you don't keep a ledger
       COALESCE(og.balance_g, 0) AS oumg_grams,
       NULL::text               AS note,        -- optional note placeholder
-      COALESCE(u.updated_at, u.created_at) AS updated_at
+      u.created_at             AS updated_at   -- ✅ your table has no updated_at
     FROM users u
     LEFT JOIN rm_balances rm ON rm.user_id = u.id
     LEFT JOIN oumg_balances og ON og.user_id = u.id
@@ -95,11 +94,8 @@ export async function listUsersWithBalances(
 export async function createUser(wallet: string, note?: string | null) {
   const userId = await ensureUserByWallet(wallet);
 
-  // Optional: persist note if you have a column for it. If not, skip.
-  // Example (uncomment if users.note exists):
-  // await query(`UPDATE users SET note = COALESCE($1, note), updated_at = NOW() WHERE id = $2`, [note ?? null, userId]);
+  // If you later add a users.note column, update it here.
 
-  // Return the same shape as list
   const row = await query(
     `
     SELECT
@@ -109,7 +105,7 @@ export async function createUser(wallet: string, note?: string | null) {
       0::numeric               AS rm_spent,
       COALESCE(og.balance_g, 0) AS oumg_grams,
       NULL::text               AS note,
-      COALESCE(u.updated_at, u.created_at) AS updated_at
+      u.created_at             AS updated_at   -- ✅
     FROM users u
     LEFT JOIN rm_balances rm ON rm.user_id = u.id
     LEFT JOIN oumg_balances og ON og.user_id = u.id
@@ -132,7 +128,6 @@ export async function creditUserByWallet(wallet: string, amountMyr: number, note
     throw new Error("amount_myr must be > 0");
   }
 
-  // Begin transaction
   await query("BEGIN");
   try {
     const user = await getUserByWallet(w);
@@ -147,15 +142,12 @@ export async function creditUserByWallet(wallet: string, amountMyr: number, note
       [amountMyr, userId]
     );
 
-    // Optional: store note somewhere if you have a notes table/column.
-
     await query("COMMIT");
   } catch (e) {
     await query("ROLLBACK");
     throw e;
   }
 
-  // Return updated snapshot
   const row = await query(
     `
     SELECT
@@ -165,7 +157,7 @@ export async function creditUserByWallet(wallet: string, amountMyr: number, note
       0::numeric               AS rm_spent,
       COALESCE(og.balance_g, 0) AS oumg_grams,
       NULL::text               AS note,
-      COALESCE(u.updated_at, u.created_at) AS updated_at
+      u.created_at             AS updated_at   -- ✅
     FROM users u
     LEFT JOIN rm_balances rm ON rm.user_id = u.id
     LEFT JOIN oumg_balances og ON og.user_id = u.id
@@ -200,7 +192,7 @@ export async function recordPurchaseByWallet(
     const user = await getUserByWallet(w);
     const userId = user ? user.id : await ensureUserByWallet(w);
 
-    // Fetch current RM balance
+    // Lock RM row
     const balRes = await query<{ balance_myr: string }>(
       `SELECT balance_myr FROM rm_balances WHERE user_id = $1 FOR UPDATE`,
       [userId]
@@ -226,8 +218,6 @@ export async function recordPurchaseByWallet(
       [grams, userId]
     );
 
-    // Optional: persist note somewhere if needed.
-
     await query("COMMIT");
   } catch (e) {
     await query("ROLLBACK");
@@ -243,7 +233,7 @@ export async function recordPurchaseByWallet(
       0::numeric               AS rm_spent,
       COALESCE(og.balance_g, 0) AS oumg_grams,
       NULL::text               AS note,
-      COALESCE(u.updated_at, u.created_at) AS updated_at
+      u.created_at             AS updated_at   -- ✅
     FROM users u
     LEFT JOIN rm_balances rm ON rm.user_id = u.id
     LEFT JOIN oumg_balances og ON og.user_id = u.id
