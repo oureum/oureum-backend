@@ -1,6 +1,10 @@
 // src/swagger.ts
 import swaggerJSDoc from "swagger-jsdoc";
 
+/**
+ * Base OpenAPI spec. We keep components minimal here and attach paths later
+ * so that routes can be evolved without touching the base shape.
+ */
 export const swaggerSpec = swaggerJSDoc({
   definition: {
     openapi: "3.0.3",
@@ -11,9 +15,9 @@ export const swaggerSpec = swaggerJSDoc({
         "Oureum Admin & User API. Admin endpoints require x-admin-wallet header.",
     },
     servers: [
-      // Add prod domain so 'Try it out' points to prod by default when deployed
+      // Prod first so "Try it out" defaults to prod in deployed Swagger UI
       { url: "https://api.oureum.com", description: "Prod" },
-      { url: "http://localhost:4000", description: "Local" }
+      { url: "http://localhost:4000", description: "Local" },
     ],
     components: {
       securitySchemes: {
@@ -25,6 +29,7 @@ export const swaggerSpec = swaggerJSDoc({
         },
       },
       schemas: {
+        // Existing example schema
         PriceSnapshot: {
           type: "object",
           properties: {
@@ -38,15 +43,37 @@ export const swaggerSpec = swaggerJSDoc({
             created_at: { type: "string", format: "date-time" },
           },
         },
+
+        /**
+         * AdminUser schema used by Admin Users endpoints.
+         * This matches what the admin UI table expects.
+         */
+        AdminUser: {
+          type: "object",
+          properties: {
+            id: { type: "integer", example: 123 },
+            wallet: { type: "string", example: "0x0bf3e5f98d659bce08c3aed0ad5f373ba1ceb24f" },
+            rm_credit: { type: "number", example: 1250.5 },
+            rm_spent: { type: "number", example: 750.0 },
+            oumg_grams: { type: "number", example: 3.5 },
+            note: { type: "string", nullable: true, example: "Core admin" },
+            updated_at: { type: "string", format: "date-time", nullable: true },
+          },
+          required: ["wallet", "rm_credit", "rm_spent", "oumg_grams"],
+        },
       },
     },
   },
   apis: [],
 });
 
+/**
+ * Attach all paths to the swaggerSpec.
+ * Keep this function side-effect-only so callers can run it before mounting /docs.
+ */
 export function attachPathsToSpec() {
   (swaggerSpec as any).paths = {
-    // ---- Health
+    // ---- System
     "/healthz": {
       get: { summary: "Health check", tags: ["System"], responses: { 200: { description: "OK" } } },
     },
@@ -174,7 +201,7 @@ export function attachPathsToSpec() {
         tags: ["Redemption"],
         security: [{ AdminWalletHeader: [] }],
         parameters: [
-          { in: "query", name: "status", schema: { type: "string" } },
+          { in: "query", name: "status", schema: { type: "string", enum: ["PENDING", "APPROVED", "REJECTED", "COMPLETED"] } },
           { in: "query", name: "limit", schema: { type: "integer", default: 50 } },
           { in: "query", name: "offset", schema: { type: "integer", default: 0 } },
         ],
@@ -206,7 +233,7 @@ export function attachPathsToSpec() {
       },
     },
 
-    // ---- Admin
+    // ---- Admin (Legacy/Other)
     "/api/admin/faucet-rm": {
       post: {
         summary: "Credit RM to a wallet (admin faucet)",
@@ -236,20 +263,136 @@ export function attachPathsToSpec() {
         responses: { 200: { description: "Balances" } },
       },
     },
+
+    // ---- Admin Users (NEW)
     "/api/admin/users": {
       get: {
         summary: "List users with balances (admin)",
-        tags: ["Admin"],
+        tags: ["Admin Users"],
         security: [{ AdminWalletHeader: [] }],
         parameters: [
-          { in: "query", name: "limit", schema: { type: "integer", default: 50 } },
-          { in: "query", name: "offset", schema: { type: "integer", default: 0 } },
+          { in: "query", name: "limit", schema: { type: "integer", default: 50, minimum: 1, maximum: 200 } },
+          { in: "query", name: "offset", schema: { type: "integer", default: 0, minimum: 0 } },
+          { in: "query", name: "q", schema: { type: "string", description: "Search by wallet (ILIKE %q%)" } },
         ],
-        responses: { 200: { description: "List" } },
+        responses: {
+          200: {
+            description: "OK",
+            content: {
+              "application/json": {
+                schema: {
+                  type: "object",
+                  properties: {
+                    data: { type: "array", items: { $ref: "#/components/schemas/AdminUser" } },
+                    limit: { type: "integer" },
+                    offset: { type: "integer" },
+                    q: { type: "string", nullable: true },
+                  },
+                },
+              },
+            },
+          },
+        },
+      },
+      post: {
+        summary: "Create (ensure) a user by wallet (admin)",
+        tags: ["Admin Users"],
+        security: [{ AdminWalletHeader: [] }],
+        requestBody: {
+          required: true,
+          content: {
+            "application/json": {
+              schema: {
+                type: "object",
+                required: ["wallet"],
+                properties: {
+                  wallet: { type: "string", example: "0xabc...123" },
+                  note: { type: "string", nullable: true },
+                },
+              },
+            },
+          },
+        },
+        responses: {
+          201: {
+            description: "Created",
+            content: {
+              "application/json": { schema: { $ref: "#/components/schemas/AdminUser" } },
+            },
+          },
+        },
+      },
+    },
+    "/api/admin/users/{wallet}/credit": {
+      post: {
+        summary: "Credit RM to a user (admin)",
+        tags: ["Admin Users"],
+        security: [{ AdminWalletHeader: [] }],
+        parameters: [
+          { name: "wallet", in: "path", required: true, schema: { type: "string" } },
+        ],
+        requestBody: {
+          required: true,
+          content: {
+            "application/json": {
+              schema: {
+                type: "object",
+                required: ["amount_myr"],
+                properties: {
+                  amount_myr: { type: "number", example: 1000 },
+                  note: { type: "string", nullable: true },
+                },
+              },
+            },
+          },
+        },
+        responses: {
+          200: {
+            description: "OK",
+            content: {
+              "application/json": { schema: { $ref: "#/components/schemas/AdminUser" } },
+            },
+          },
+        },
+      },
+    },
+    "/api/admin/users/{wallet}/purchase": {
+      post: {
+        summary: "Record a purchase (deduct RM, add grams) (admin)",
+        tags: ["Admin Users"],
+        security: [{ AdminWalletHeader: [] }],
+        parameters: [
+          { name: "wallet", in: "path", required: true, schema: { type: "string" } },
+        ],
+        requestBody: {
+          required: true,
+          content: {
+            "application/json": {
+              schema: {
+                type: "object",
+                required: ["grams", "unit_price_myr_per_g"],
+                properties: {
+                  grams: { type: "number", example: 2.5 },
+                  unit_price_myr_per_g: { type: "number", example: 500 },
+                  note: { type: "string", nullable: true },
+                },
+              },
+            },
+          },
+        },
+        responses: {
+          200: {
+            description: "OK",
+            content: {
+              "application/json": { schema: { $ref: "#/components/schemas/AdminUser" } },
+            },
+          },
+          400: { description: "insufficient RM credit or bad input" },
+        },
       },
     },
 
-    // ---- Ledger (admin-only guarded by middleware)
+    // ---- Ledger (admin)
     "/api/ledger/gold": {
       post: {
         summary: "Create gold ledger entry (admin)",
