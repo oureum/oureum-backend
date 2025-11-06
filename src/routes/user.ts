@@ -1,21 +1,34 @@
-import { Router } from "express";
-import { getUserBalances } from "../controllers/userController";
-import { getUserTokenHistory } from "../controllers/userController";
-import { mintOnchainController } from "../controllers/mintOnchainController";
+// src/routes/user.ts
+import express from "express";
+import { userGuard } from "../middlewares/userAuth";
+import {
+  registerUser,
+  getMe,
+  getBalances,
+  getActivity,
+  userMint,
+  userBurn,
+} from "../controllers/userController";
 
-const router = Router();
+const router = express.Router();
 
-// Public, read-only
-router.get("/balances", getUserBalances);
-router.get("/token-history", getUserTokenHistory);
+// All user endpoints require X-User-Wallet
+router.use(userGuard);
 
-// ---- New: On-chain mint (user) ----
-router.post("/mint-onchain", (req, res) => {
-  const authUserWallet = (req as any)?.user?.wallet || null;
-  return mintOnchainController(req, res, {
-    role: "user",
-    authUserWallet,
-  });
-});
+// Register (idempotent) – creates missing balance rows
+router.post("/register", registerUser);
+
+// Profile (user row only)
+router.get("/me", getMe);
+
+// Balances (RM + OUMG)
+router.get("/balances", getBalances);
+
+// Activity (token_ops history)
+router.get("/activity", getActivity);
+
+// Token operations (user-initiated)
+router.post("/mint", userMint);
+router.post("/burn", userBurn);
 
 export default router;
