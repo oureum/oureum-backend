@@ -14,6 +14,7 @@ import redemptionRoutes from "./routes/redemption";
 import priceRoutes from "./routes/price";
 import chainRoutes from "./routes/chain";
 import userRoutes from "./routes/user";
+import tokenOpsRoutes from "./routes/tokenOps";
 
 import { startPriceCron } from "./jobs/priceCron";
 
@@ -95,6 +96,7 @@ app.use("/api/redemption", redemptionRoutes);
 app.use("/api/price", priceRoutes);
 app.use("/api/chain", chainRoutes);
 app.use("/api/user", userRoutes);
+app.use("/api/token-ops", tokenOpsRoutes);
 
 /* -----------------------------
    Health check

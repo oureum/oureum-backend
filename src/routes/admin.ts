@@ -15,6 +15,8 @@ import {
 import { authRequired } from "../middlewares/authMiddleware";
 import { rateLimit } from "../middlewares/rateLimit";
 import { faucetRm } from "../controllers/faucetController";
+import { mintOnchainController } from "../controllers/mintOnchainController";
+
 
 import {
   getAdminUsers,
@@ -53,4 +55,12 @@ router.post("/users/:wallet/credit", postCreditUser);
 // Record a purchase (deduct RM, increase grams)
 router.post("/users/:wallet/purchase", postRecordPurchase);
 
+// ---- New: On-chain mint (admin) ----
+router.post("/mint-onchain", (req, res) => {
+  const adminWallet = (req as any)?.admin?.wallet || null;
+  return mintOnchainController(req, res, {
+    role: "admin",
+    adminWallet,
+  });
+});
 export default router;

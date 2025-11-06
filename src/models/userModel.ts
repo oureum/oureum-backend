@@ -50,9 +50,9 @@ export async function getUserByWallet(wallet: string) {
 }
 
 /**
- * List users with balances.
+ * List users with balances (from the view).
  * Supports optional text query (wallet like), limit/offset.
- * Returns fields compatible with the admin Users UI (aliases provided).
+ * Returns fields that match the admin Users UI.
  */
 export async function listUsersWithBalances(
   limit = 50,
@@ -66,24 +66,22 @@ export async function listUsersWithBalances(
   let where = "";
   if (q && q.trim()) {
     params.push(`%${q.trim().toLowerCase()}%`);
-    where = `WHERE lower(u.wallet_address) LIKE $${params.length}`;
+    // v_users_with_balances exposes "wallet"
+    where = `WHERE lower(wallet) LIKE $${params.length}`;
   }
 
-  // rm_spent is a derived metric; if you don't keep a purchases ledger, alias 0.
   const sql = `
     SELECT
-      u.id,
-      u.wallet_address AS wallet,
-      COALESCE(rm.balance_myr, 0) AS rm_credit,
-      0::numeric                  AS rm_spent,
-      COALESCE(og.balance_g, 0)   AS oumg_grams,
-      NULL::text                  AS note,
-      u.created_at                AS updated_at   -- your table has no updated_at
-    FROM users u
-    LEFT JOIN rm_balances rm ON rm.user_id = u.id
-    LEFT JOIN oumg_balances og ON og.user_id = u.id
+      id,
+      wallet,
+      rm_credit,
+      rm_spent,
+      oumg_grams,
+      note,
+      updated_at
+    FROM v_users_with_balances
     ${where}
-    ORDER BY u.id DESC
+    ORDER BY id DESC
     LIMIT $${params.length + 1} OFFSET $${params.length + 2}
   `;
   params.push(safeLimit, safeOffset);
@@ -93,27 +91,24 @@ export async function listUsersWithBalances(
 }
 
 /**
- * Create a user by wallet (idempotent). Returns the unified user+balances shape.
+ * Create a user by wallet (idempotent). Returns the unified user+balances shape
+ * from the view (so rm_spent is present).
  */
 export async function createUser(wallet: string, note?: string | null) {
   const userId = await ensureUserByWallet(wallet);
 
-  // If you later add a users.note column, you can persist note here.
-
   const row = await query(
     `
     SELECT
-      u.id,
-      u.wallet_address AS wallet,
-      COALESCE(rm.balance_myr, 0) AS rm_credit,
-      0::numeric                  AS rm_spent,
-      COALESCE(og.balance_g, 0)   AS oumg_grams,
-      NULL::text                  AS note,
-      u.created_at                AS updated_at
-    FROM users u
-    LEFT JOIN rm_balances rm ON rm.user_id = u.id
-    LEFT JOIN oumg_balances og ON og.user_id = u.id
-    WHERE u.id = $1
+      id,
+      wallet,
+      rm_credit,
+      rm_spent,
+      oumg_grams,
+      note,
+      updated_at
+    FROM v_users_with_balances
+    WHERE id = $1
     `,
     [userId]
   );
@@ -123,11 +118,10 @@ export async function createUser(wallet: string, note?: string | null) {
 
 /**
  * Credit RM to a wallet (add funds).
- * Robust version:
- *  - Ensures user exists (upsert)
- *  - Ensures rm_balances row exists (idempotent)
- *  - Increments rm_balances.balance_myr
- *  - Returns the updated snapshot
+ * - Ensures user exists (upsert)
+ * - Ensures rm_balances row exists (idempotent)
+ * - Increments rm_balances.balance_myr
+ * - Returns the updated snapshot from the view (includes rm_spent)
  */
 export async function creditUserByWallet(wallet: string, amountMyr: number, note?: string | null) {
   const w = wallet.toLowerCase();
@@ -155,7 +149,7 @@ export async function creditUserByWallet(wallet: string, amountMyr: number, note
       [userId]
     );
 
-    // Add credit
+    // Add credit (no updated_at column mutation)
     await query(
       `UPDATE rm_balances
        SET balance_myr = balance_myr + $1
@@ -163,7 +157,7 @@ export async function creditUserByWallet(wallet: string, amountMyr: number, note
       [amountMyr, userId]
     );
 
-    // Optional: persist note into audit/notes table if you have one.
+    // (Optional) persist note elsewhere if needed.
 
     await query("COMMIT");
   } catch (e) {
@@ -171,21 +165,19 @@ export async function creditUserByWallet(wallet: string, amountMyr: number, note
     throw e;
   }
 
-  // Return updated snapshot
+  // Return updated snapshot from the view
   const row = await query(
     `
     SELECT
-      u.id,
-      u.wallet_address AS wallet,
-      COALESCE(rm.balance_myr, 0) AS rm_credit,
-      0::numeric                  AS rm_spent,
-      COALESCE(og.balance_g, 0)   AS oumg_grams,
-      NULL::text                  AS note,
-      u.created_at                AS updated_at
-    FROM users u
-    LEFT JOIN rm_balances rm ON rm.user_id = u.id
-    LEFT JOIN oumg_balances og ON og.user_id = u.id
-    WHERE lower(u.wallet_address) = lower($1)
+      id,
+      wallet,
+      rm_credit,
+      rm_spent,
+      oumg_grams,
+      note,
+      updated_at
+    FROM v_users_with_balances
+    WHERE lower(wallet) = lower($1)
     `,
     [w]
   );
@@ -194,11 +186,12 @@ export async function creditUserByWallet(wallet: string, amountMyr: number, note
 }
 
 /**
- * Record a purchase:
+ * Record a purchase (off-chain bookkeeping path):
  *  - Ensures user & both balance rows exist
  *  - Deducts RM credit (cost = grams * unit_price)
  *  - Increases OUMG grams
- *  - Returns updated snapshot
+ *  - Accumulates users.rm_spent (so the view shows it immediately)
+ *  - Returns updated snapshot from the view
  */
 export async function recordPurchaseByWallet(
   wallet: string,
@@ -224,7 +217,7 @@ export async function recordPurchaseByWallet(
     );
     const userId = userRes.rows[0].id;
 
-    // Ensure BOTH balance rows exist (very important for legacy data)
+    // Ensure BOTH balance rows exist
     await ensureBalanceRows(userId);
 
     // Lock RM row for deduction
@@ -237,19 +230,31 @@ export async function recordPurchaseByWallet(
       throw new Error("insufficient RM credit");
     }
 
-    // Deduct RM
+    // Deduct RM (no updated_at column mutation)
     await query(
-      `UPDATE rm_balances SET balance_myr = balance_myr - $1 WHERE user_id = $2`,
+      `UPDATE rm_balances
+       SET balance_myr = balance_myr - $1
+       WHERE user_id = $2`,
       [cost, userId]
     );
 
-    // Increase OUMG grams
+    // Increase OUMG grams (no updated_at column mutation)
     await query(
-      `UPDATE oumg_balances SET balance_g = balance_g + $1 WHERE user_id = $2`,
+      `UPDATE oumg_balances
+       SET balance_g = balance_g + $1
+       WHERE user_id = $2`,
       [grams, userId]
     );
 
-    // Optional: persist note to audit/notes.
+    // Accumulate rm_spent so the view reflects it immediately
+    await query(
+      `UPDATE users
+       SET rm_spent = COALESCE(rm_spent,0) + $1
+       WHERE id = $2`,
+      [cost, userId]
+    );
+
+    // (Optional) persist note to audit/notes.
 
     await query("COMMIT");
   } catch (e) {
@@ -257,21 +262,19 @@ export async function recordPurchaseByWallet(
     throw e;
   }
 
-  // Return updated snapshot
+  // Return updated snapshot from the view
   const row = await query(
     `
     SELECT
-      u.id,
-      u.wallet_address AS wallet,
-      COALESCE(rm.balance_myr, 0) AS rm_credit,
-      0::numeric                  AS rm_spent,
-      COALESCE(og.balance_g, 0)   AS oumg_grams,
-      NULL::text                  AS note,
-      u.created_at                AS updated_at
-    FROM users u
-    LEFT JOIN rm_balances rm ON rm.user_id = u.id
-    LEFT JOIN oumg_balances og ON og.user_id = u.id
-    WHERE lower(u.wallet_address) = lower($1)
+      id,
+      wallet,
+      rm_credit,
+      rm_spent,
+      oumg_grams,
+      note,
+      updated_at
+    FROM v_users_with_balances
+    WHERE lower(wallet) = lower($1)
     `,
     [w]
   );

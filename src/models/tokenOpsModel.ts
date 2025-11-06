@@ -1,8 +1,11 @@
+// src/models/tokenOpsModel.ts
 import { pool } from "../db";
 
-/** 
+/**
  * Insert a token operation row (generic helper).
  * Prefer using buyAndMint / sellAndBurn which also move balances in a transaction.
+ * - Persists wallet_address by reading it from users table to de-normalize for quick filtering.
+ * - Supports optional txHash and note.
  */
 export async function recordTokenOp(
   userId: number,
@@ -39,20 +42,25 @@ export async function recordTokenOp(
 }
 
 /**
- * Perform a full buy+mint (deduct RM, add OUMG) in a single DB transaction.
- * Returns the new balances and the generated op id so the caller can update tx_hash later.
+ * Perform a full BUY + MINT in a single DB transaction:
+ *  - Deduct RM (rm_balances)
+ *  - Increase OUMG (oumg_balances)
+ *  - Accumulate users.rm_spent
+ *  - Insert token_ops (with wallet_address + note)
+ * Returns new balances and op id for later tx_hash attachment.
  */
 export async function buyAndMint(
   userId: number,
   grams: number,
-  pricePerGram: number
+  pricePerGram: number,
+  note?: string | null
 ) {
   const spend = grams * pricePerGram;
   const client = await pool.connect();
   try {
     await client.query("BEGIN");
 
-    // Deduct RM
+    // 1) Deduct RM credit
     const rmRes = await client.query(
       `
       UPDATE rm_balances
@@ -65,7 +73,7 @@ export async function buyAndMint(
     if (rmRes.rowCount === 0) throw new Error("User RM balance missing");
     if (Number(rmRes.rows[0].balance_myr) < 0) throw new Error("Insufficient RM balance");
 
-    // Add OUMG
+    // 2) Increase OUMG grams
     const oumgRes = await client.query(
       `
       UPDATE oumg_balances
@@ -77,7 +85,18 @@ export async function buyAndMint(
     );
     if (oumgRes.rowCount === 0) throw new Error("User OUMG balance missing");
 
-    // Log operation
+    // 3) Accumulate user's cumulative spend
+    await client.query(
+      `
+      UPDATE users
+      SET rm_spent = COALESCE(rm_spent, 0) + $1,
+          updated_at = NOW()
+      WHERE id = $2
+      `,
+      [spend, userId]
+    );
+
+    // 4) Log operation (BUY_MINT)
     const op = await client.query(
       `
       INSERT INTO token_ops (
@@ -86,7 +105,8 @@ export async function buyAndMint(
         op_type,
         grams,
         amount_myr,
-        price_myr_per_g
+        price_myr_per_g,
+        note
       )
       VALUES (
         $1,
@@ -94,11 +114,12 @@ export async function buyAndMint(
         'BUY_MINT',
         $2,
         $3,
-        $4
+        $4,
+        $5
       )
       RETURNING id, wallet_address, created_at
       `,
-      [userId, grams, spend, pricePerGram]
+      [userId, grams, spend, pricePerGram, note || null]
     );
 
     await client.query("COMMIT");
@@ -116,20 +137,27 @@ export async function buyAndMint(
 }
 
 /**
- * Perform a full sell+burn (deduct OUMG, credit RM) in a single DB transaction.
- * Returns the new balances and the generated op id so the caller can update tx_hash later.
+ * Perform a full SELL + BURN in a single DB transaction:
+ *  - Deduct OUMG (oumg_balances)
+ *  - Credit RM (rm_balances)
+ *  - Insert token_ops (with wallet_address + note)
+ * Returns new balances and op id for later tx_hash attachment.
+ *
+ * NOTE: rm_spent is NOT decreased here; if you need a separate metric for refunds,
+ *       add another column like rm_refunded and maintain it symmetrically.
  */
 export async function sellAndBurn(
   userId: number,
   grams: number,
-  pricePerGram: number
+  pricePerGram: number,
+  note?: string | null
 ) {
   const refund = grams * pricePerGram;
   const client = await pool.connect();
   try {
     await client.query("BEGIN");
 
-    // Deduct OUMG
+    // 1) Deduct OUMG grams
     const oumgRes = await client.query(
       `
       UPDATE oumg_balances
@@ -142,7 +170,7 @@ export async function sellAndBurn(
     if (oumgRes.rowCount === 0) throw new Error("User OUMG balance missing");
     if (Number(oumgRes.rows[0].balance_g) < 0) throw new Error("Insufficient OUMG balance");
 
-    // Credit RM
+    // 2) Credit RM
     const rmRes = await client.query(
       `
       UPDATE rm_balances
@@ -154,7 +182,7 @@ export async function sellAndBurn(
     );
     if (rmRes.rowCount === 0) throw new Error("User RM balance missing");
 
-    // Log operation
+    // 3) Log operation (SELL_BURN)
     const op = await client.query(
       `
       INSERT INTO token_ops (
@@ -163,7 +191,8 @@ export async function sellAndBurn(
         op_type,
         grams,
         amount_myr,
-        price_myr_per_g
+        price_myr_per_g,
+        note
       )
       VALUES (
         $1,
@@ -171,11 +200,12 @@ export async function sellAndBurn(
         'SELL_BURN',
         $2,
         $3,
-        $4
+        $4,
+        $5
       )
       RETURNING id, wallet_address, created_at
       `,
-      [userId, grams, refund, pricePerGram]
+      [userId, grams, refund, pricePerGram, note || null]
     );
 
     await client.query("COMMIT");
@@ -201,7 +231,10 @@ export async function updateTokenOpTxHash(opId: number, txHash: string) {
   return q.rows[0] as { id: number; tx_hash: string };
 }
 
-/** Public list: token ops by wallet (pagination). */
+/**
+ * Public list: token ops by wallet (pagination).
+ * - Use lower() on the filter to be case-insensitive.
+ */
 export async function listOpsByWallet(wallet: string, limit = 50, offset = 0) {
   const q = await pool.query(
     `
@@ -237,7 +270,6 @@ export async function listAllOps(limit = 50, offset = 0) {
       amount_myr,
       price_myr_per_g,
       tx_hash,
-      note,
       created_at
     FROM token_ops
     ORDER BY created_at DESC

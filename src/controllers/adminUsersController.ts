@@ -6,6 +6,7 @@ import {
   recordPurchaseByWallet,
 } from "../models/userModel";
 import { insertAdminAudit } from "../models/auditModel";
+import { adminPurchaseSchema } from "../schemas";
 
 /**
  * GET /api/admin/users
@@ -34,6 +35,7 @@ export async function postCreateUser(req: Request, res: Response) {
     const wallet = String(req.body?.wallet || "").trim();
     const note = req.body?.note ? String(req.body.note) : null;
 
+    // Basic wallet validation
     if (!wallet || !wallet.startsWith("0x") || wallet.length < 6) {
       return res.status(400).json({ error: "Invalid wallet" });
     }
@@ -58,6 +60,7 @@ export async function postCreditUser(req: Request, res: Response) {
     const amount = Number(req.body?.amount_myr || 0);
     const note = req.body?.note ? String(req.body.note) : null;
 
+    // Basic validation
     if (!wallet || !wallet.startsWith("0x")) {
       return res.status(400).json({ error: "Invalid wallet" });
     }
@@ -76,35 +79,51 @@ export async function postCreditUser(req: Request, res: Response) {
 
 /**
  * POST /api/admin/users/:wallet/purchase
- * Body: { grams: number, unit_price_myr_per_g: number, note?: string }
+ * Purpose:
+ *  - Deduct RM credit based on grams * unit_price_myr_per_g
+ *  - Increase OUMG grams
+ *  - Optionally persist tx_hash in audit detail (so UI can link explorer)
+ *
+ * Body (validated by zod):
+ *  {
+ *    grams: number > 0,
+ *    unit_price_myr_per_g: number > 0,
+ *    note?: string,
+ *    tx_hash?: "0x" + 64 hex
+ *  }
  */
 export async function postRecordPurchase(req: Request, res: Response) {
   try {
     const admin = String(req.headers["x-admin-wallet"] || "");
     const wallet = String(req.params.wallet || "").trim();
-    const grams = Number(req.body?.grams || 0);
-    const unitPrice = Number(req.body?.unit_price_myr_per_g || 0);
-    const note = req.body?.note ? String(req.body.note) : null;
 
+    // Basic wallet validation
     if (!wallet || !wallet.startsWith("0x")) {
       return res.status(400).json({ error: "Invalid wallet" });
     }
-    if (!(grams > 0)) {
-      return res.status(400).json({ error: "grams must be > 0" });
-    }
-    if (!(unitPrice > 0)) {
-      return res.status(400).json({ error: "unit_price_myr_per_g must be > 0" });
-    }
 
-    const row = await recordPurchaseByWallet(wallet, grams, unitPrice, note);
+    // Validate and parse body with zod
+    const parseResult = adminPurchaseSchema.safeParse(req.body);
+    if (!parseResult.success) {
+      const msg = parseResult.error.issues?.[0]?.message || "Invalid payload";
+      return res.status(400).json({ error: msg });
+    }
+    const { grams, unit_price_myr_per_g: unitPrice, note, tx_hash } = parseResult.data;
+
+    // Core business: deduct RM, add grams (idempotent ensures both rows)
+    const row = await recordPurchaseByWallet(wallet, grams, unitPrice, note ?? null);
+
+    // Write admin audit. We store tx_hash in the JSON detail for traceability.
     await insertAdminAudit(admin, "USER_PURCHASED", wallet, {
       grams,
       unit_price_myr_per_g: unitPrice,
       cost_myr: grams * unitPrice,
-      note,
+      note: note ?? null,
+      tx_hash: tx_hash ?? null,
     });
 
-    res.json(row);
+    // Respond with the updated snapshot and echo tx_hash for the UI
+    res.json({ ...row, tx_hash: tx_hash ?? null });
   } catch (err: any) {
     const msg = err?.message ?? "Failed to record purchase";
     const status = msg.includes("insufficient RM credit") ? 400 : 500;
