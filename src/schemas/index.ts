@@ -83,3 +83,20 @@ export const adminPurchaseSchema = z.object({
     .regex(/^0x[0-9a-fA-F]{64}$/, "invalid tx hash")
     .optional(),
 });
+
+/** Admin price current (manual override)
+ * Accept EITHER:
+ *  - { myrPerG, note? }
+ *  - { myrPerG_buy, myrPerG_sell, note? }
+ */
+export const priceCurrentPostSchema = z.union([
+  z.object({
+    myrPerG: z.number().positive(),
+    note: z.string().max(500).optional(),
+  }),
+  z.object({
+    myrPerG_buy: z.number().positive(),
+    myrPerG_sell: z.number().positive(),
+    note: z.string().max(500).optional(),
+  }),
+]);

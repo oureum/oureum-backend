@@ -29,8 +29,9 @@ async function runOnce() {
       last_updated: bnm.last_updated,
       bnm_myr_per_oz_buying: bnm.myr_per_oz_buying,
       bnm_myr_per_oz_selling: bnm.myr_per_oz_selling,
-      myr_per_g_buy: grams.buy,
-      myr_per_g_sell: grams.sell,
+      // ✅ use DB column names expected by InsertSnapshotParams
+      buy_myr_per_g: grams.buy,
+      sell_myr_per_g: grams.sell,
       computed_myr_per_g: avg,
       buy_bps_applied: Number(process.env.PRICE_BUY_BPS || 0),
       sell_bps_applied: Number(process.env.PRICE_SELL_BPS || 0),
@@ -52,14 +53,18 @@ export function startPriceCron() {
   }
 
   // run immediately once on boot
-  runOnce().catch(() => { /* already logged inside */ });
+  runOnce().catch(() => {
+    /* already logged inside */
+  });
 
   // then schedule every 30 minutes (UTC)
   const spec = process.env.PRICE_CRON_SPEC || "*/30 * * * *";
   cron.schedule(
     spec,
     () => {
-      runOnce().catch(() => { /* already logged inside */ });
+      runOnce().catch(() => {
+        /* already logged inside */
+      });
     },
     { timezone: "UTC" }
   );

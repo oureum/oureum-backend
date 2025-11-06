@@ -1,15 +1,19 @@
+// src/routes/price.ts
 import express from "express";
 import { adminGuard } from "../middlewares/authMiddleware";
-import { getCurrentPrice, setManualPrice, listSnapshots } from "../controllers/priceController";
+import { getCurrentPrice, postCurrentPrice, listSnapshots } from "../controllers/priceController";
 import { validateBody, validateQuery } from "../middlewares/validate";
-import { priceManualUpdateSchema, paginationQuerySchema } from "../schemas";
+import { priceCurrentPostSchema, paginationQuerySchema } from "../schemas";
 
 const router = express.Router();
 
+// Public: read current price (never calls vendor when PRICE_MODE=manual)
 router.get("/current", getCurrentPrice);
 
-router.use(adminGuard);
-router.post("/manual-update", validateBody(priceManualUpdateSchema), setManualPrice);
-router.get("/snapshots", validateQuery(paginationQuerySchema), listSnapshots);
+// Admin: create a new manual pricing sheet (overrides by latest record)
+router.post("/current", adminGuard, validateBody(priceCurrentPostSchema), postCurrentPrice);
+
+// Admin: list snapshots (history)
+router.get("/snapshots", adminGuard, validateQuery(paginationQuerySchema), listSnapshots);
 
 export default router;
