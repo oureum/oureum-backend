@@ -1,7 +1,8 @@
 // src/controllers/adminTokenOpsController.ts
-// Controller for admin token operations (pause/resume/status + logs list)
+// Controller for admin token operations (pause/resume/status + unified logs list)
 // Uses on-chain calls from src/lib/chain.server.ts
 // Persists DB state and logs into the generic `audits` table with type='TOKEN_OPS'.
+// Also reads `token_ops` table to unify MINT/BURN logs into a single endpoint.
 
 import { Request, Response } from "express";
 import { serverPause, serverResume, serverGetPaused } from "../lib/chain.server";
@@ -126,8 +127,24 @@ export async function getContractStatus(_req: Request, res: Response) {
 
 /**
  * GET /api/token-ops/logs
- * Query TOKEN_OPS audit logs from `audits`.
- * Supports: ?limit=100&offset=0&action=PAUSE|RESUME&operator=0x...&date_from=ISO&date_to=ISO
+ * Unified logs: TOKEN_OPS (audits) + MINT/BURN (token_ops)
+ *
+ * Query params:
+ *   ?limit=10&offset=0
+ *   &action=PAUSE|RESUME|BUY_MINT|SELL_BURN   (optional)
+ *   &operator=0x...                           (optional, case-insensitive)
+ *   &date_from=YYYY-MM-DD or ISO              (optional)
+ *   &date_to=YYYY-MM-DD or ISO                (optional)
+ *
+ * Return shape:
+ *   { data: [{ id, type, action, operator, detail(json), created_at }], limit, offset }
+ *
+ * Notes:
+ *  - `id` is a string prefixed by table source, e.g. "audits:123" or "token_ops:456"
+ *  - `type` is "TOKEN_OPS" for audits; "MINT_BURN" for token_ops
+ *  - `action` is PAUSE/RESUME for audits; BUY_MINT/SELL_BURN for token_ops
+ *  - `operator` is audits.operator or token_ops.wallet_address
+ *  - `detail` is jsonb; token_ops packs { tx_hash, grams }
  */
 export async function listTokenOpsLogs(req: Request, res: Response) {
   try {
@@ -139,47 +156,83 @@ export async function listTokenOpsLogs(req: Request, res: Response) {
     const dateFromRaw = typeof req.query.date_from === "string" ? req.query.date_from : "";
     const dateToRaw = typeof req.query.date_to === "string" ? req.query.date_to : "";
 
-    const action = actionRaw.trim().toUpperCase();
-    const operator = operatorRaw.trim().toLowerCase();
+    // Normalize filters
+    const action = actionRaw.trim().toUpperCase(); // PAUSE | RESUME | BUY_MINT | SELL_BURN
+    const operator = operatorRaw.trim().toLowerCase(); // 0x...
     const dateFrom = dateFromRaw.trim();
     const dateTo = dateToRaw.trim();
 
-    const where: string[] = [`type = 'TOKEN_OPS'`]; // always scope to TOKEN_OPS
+    // WHERE for unified rows
+    const where: string[] = [];
     const params: any[] = [];
+    let i = 1;
 
     if (action) {
+      where.push(`u.action = $${i++}`);
       params.push(action);
-      where.push(`action = $${params.length}`);
     }
     if (operator) {
+      // audits.operator / token_ops.wallet_address normalized to unified.operator
+      where.push(`LOWER(u.operator) = $${i++}`);
       params.push(operator);
-      where.push(`lower(operator) = $${params.length}`);
     }
     if (dateFrom) {
+      where.push(`u.created_at >= $${i++}::timestamptz`);
       params.push(dateFrom);
-      where.push(`created_at >= $${params.length}::timestamptz`);
     }
     if (dateTo) {
+      where.push(`u.created_at <= $${i++}::timestamptz`);
       params.push(dateTo);
-      where.push(`created_at <= $${params.length}::timestamptz`);
     }
 
-    const whereSql = `WHERE ${where.join(" AND ")}`;
+    const whereSql = where.length ? `WHERE ${where.join(" AND ")}` : "";
+
+    // Build unified dataset:
+    // - audits (type=TOKEN_OPS) → actions PAUSE/RESUME
+    // - token_ops (op_type=BUY_MINT/SELL_BURN) → type MINT_BURN + detail {tx_hash, grams}
+    const sql = `
+      WITH a AS (
+        SELECT 
+          ('audits:' || a.id)::text AS id,
+          'TOKEN_OPS'::text AS type,
+          a.action::text AS action,
+          a.operator::text AS operator,
+          a.detail::jsonb AS detail,
+          a.created_at
+        FROM audits a
+        WHERE a.type = 'TOKEN_OPS'
+      ),
+      t AS (
+        SELECT
+          ('token_ops:' || t.id)::text AS id,
+          'MINT_BURN'::text AS type,
+          t.op_type::text AS action,               -- BUY_MINT | SELL_BURN
+          t.wallet_address::text AS operator,
+          jsonb_build_object(
+            'tx_hash', t.tx_hash,
+            'grams', t.grams
+          ) AS detail,
+          t.created_at
+        FROM token_ops t
+      ),
+      unified AS (
+        SELECT * FROM a
+        UNION ALL
+        SELECT * FROM t
+      )
+      SELECT u.id, u.type, u.action, u.operator, u.detail, u.created_at
+      FROM unified u
+      ${whereSql}
+      ORDER BY u.created_at DESC, u.id DESC
+      LIMIT $${i++} OFFSET $${i++}
+    `;
 
     params.push(limit, offset);
-    const sql = `
-      SELECT id, operator, action, detail, created_at
-      FROM audits
-      ${whereSql}
-      ORDER BY created_at DESC
-      LIMIT $${params.length - 1} OFFSET $${params.length}
-    `;
-    const { rows } = await pool.query(sql, params);
 
-    // Return as-is; `detail` is JSONB which frontend can render/formatt
+    const { rows } = await pool.query(sql, params);
     return res.json({ data: rows, limit, offset });
   } catch (err: any) {
-    console.error("listTokenOpsLogs error:", err);
+    console.error("listTokenOpsLogs unified error:", err);
     return res.status(500).json({ error: err?.message || "listTokenOpsLogs failed" });
   }
 }
